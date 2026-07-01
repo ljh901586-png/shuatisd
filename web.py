@@ -3,7 +3,14 @@ import json
 import os
 
 # ===================== 常量定义 =====================
-DB_FILE = 'maogai_db.json'
+# 三个题库文件，key 是显示在界面上的题库名字，value 是对应的 json 文件名
+# 如果以后要加/减题库，只需要在这里增删一行即可
+BANK_FILES = {
+    "毛概题库": "maogai_db.json",
+    "毛概单选题库": "maogai_single_db.json",
+    "思修题库": "xigai_db.json",
+}
+
 ERROR_BOOK_FILE = 'error_book.json'
 PROGRESS_FILE = 'progress.json'
 PAGE_QUIZ = "quiz"
@@ -44,7 +51,45 @@ def save_progress(idx, bank_name):
 
 @st.cache_data
 def load_questions():
-    return safe_load_json(DB_FILE, [])
+    """
+    依次读取 BANK_FILES 里配置的所有题库文件并合并成一个大列表。
+    - 给每道题打上"所属题库"的 tag（自动加到 tags 列表最前面），
+      这样原来"按tags筛选题库"的下拉菜单逻辑完全不用改，
+      三个题库会自动一起出现在选择框里。
+    - 由于三个文件里的题目 id 可能会重复（比如都是从1开始编号），
+      这里生成一个跨题库唯一的 uid，用它来做 session_state 的 key、
+      错题本的 key，避免不同题库的题互相冲突覆盖。
+    """
+    all_questions = []
+    missing_files = []
+
+    for bank_name, filename in BANK_FILES.items():
+        if not os.path.exists(filename):
+            missing_files.append(filename)
+            continue
+        try:
+            with open(filename, "r", encoding="utf-8") as f:
+                questions = json.load(f)
+        except Exception:
+            st.toast(f"文件{filename}损坏，已跳过该题库", icon="⚠️")
+            continue
+
+        for q in questions:
+            # 跨题库唯一标识，格式：题库名__原始id
+            q["uid"] = f"{bank_name}__{q.get('id')}"
+            q["bank"] = bank_name
+            # 把题库名字自动加入 tags，且放在第一位，方便筛选/展示
+            tags = q.get("tags", [])
+            if bank_name not in tags:
+                tags = [bank_name] + tags
+            q["tags"] = tags
+
+        all_questions.extend(questions)
+
+    if missing_files:
+        st.warning(f"⚠️ 以下题库文件未找到，已跳过：{', '.join(missing_files)}")
+
+    return all_questions
 
 def load_error_book():
     return safe_load_json(ERROR_BOOK_FILE, {})
@@ -64,7 +109,7 @@ def get_all_tags(question_list):
 # ===================== 状态初始化 =====================
 all_questions = load_questions()
 if not all_questions:
-    st.error(f"找不到题库文件 {DB_FILE}，请确保它在同一目录下！")
+    st.error(f"找不到任何题库文件，请确保 {', '.join(BANK_FILES.values())} 至少有一个在同一目录下！")
     st.stop()
 
 if "error_book" not in st.session_state:
@@ -129,7 +174,7 @@ if st.session_state.current_page == PAGE_QUIZ:
         if st.session_state.current_idx >= total_q:
             st.session_state.current_idx = 0
         q = current_questions[st.session_state.current_idx]
-        q_id_str = str(q["id"])
+        q_id_str = q["uid"]
 
         st.progress((st.session_state.current_idx + 1) / total_q)
         st.caption(f"当前进度: {st.session_state.current_idx + 1} / {total_q} | 题号 ID: {q_id_str} | 当前题库: {st.session_state.current_bank}")
@@ -213,7 +258,7 @@ elif st.session_state.current_page == PAGE_ERROR_BOOK:
         st.info("🎈 暂无错题，快去刷题收藏错题吧！")
     else:
         # 匹配错题完整题目
-        error_questions = [q for q in all_questions if str(q["id"]) in error_book]
+        error_questions = [q for q in all_questions if q["uid"] in error_book]
         # 标签筛选
         tag_set = set([ALL_TAG])
         for q in error_questions:
@@ -228,7 +273,7 @@ elif st.session_state.current_page == PAGE_ERROR_BOOK:
         else:
             st.write(f"当前筛选下共有 **{len(error_questions)}** 道错题：")
             for idx, q in enumerate(error_questions):
-                q_id_str = str(q["id"])
+                q_id_str = q["uid"]
                 record = error_book[q_id_str]
                 with st.container(border=True):
                     st.markdown(f"**{idx + 1}. {q['question']}**")
@@ -244,7 +289,7 @@ elif st.session_state.current_page == PAGE_ERROR_BOOK:
                     with c1:
                         if st.button("🔄 重做本题", key=f"redo_{q_id_str}", use_container_width=True):
                             # 定位题目原始索引，不强制切全部题目
-                            target_idx = next((i for i, item in enumerate(all_questions) if item["id"] == q["id"]), 0)
+                            target_idx = next((i for i, item in enumerate(all_questions) if item["uid"] == q["uid"]), 0)
                             # 切换回全部题目，保留原逻辑
                             st.session_state.current_bank = ALL_TAG
                             st.session_state.current_idx = target_idx
