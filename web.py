@@ -8,6 +8,23 @@ st.set_page_config(page_title="智能毛概刷题神器 (Pro Max)", page_icon="�
 # --- 核心文件路径 ---
 DB_FILE = 'maogai_db.json'
 ERROR_BOOK_FILE = 'error_book.json'
+PROGRESS_FILE = 'progress.json' # 【新增】进度保存文件
+# --- 数据加载与持久化逻辑 ---
+# ... (保留原有的 load_questions 和 load_error_book 等函数) ...
+
+# 【新增】以下两个关于进度的函数
+def load_progress():
+    """读取本地的刷题进度"""
+    if os.path.exists(PROGRESS_FILE):
+        with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return data.get('current_idx', 0)
+    return 0
+
+def save_progress(idx):
+    """保存当前进度到本地"""
+    with open(PROGRESS_FILE, 'w', encoding='utf-8') as f:
+        json.dump({'current_idx': idx}, f, ensure_ascii=False, indent=4)
 
 # --- 数据加载与持久化逻辑 ---
 @st.cache_data
@@ -38,7 +55,7 @@ if not all_questions:
 if 'error_book' not in st.session_state:
     st.session_state.error_book = load_error_book()
 if 'current_idx' not in st.session_state:
-    st.session_state.current_idx = 0
+    st.session_state.current_idx = load_progress() # 【修改】从文件加载上次的进度
 if 'submitted' not in st.session_state:
     st.session_state.submitted = False
 if 'current_page' not in st.session_state:
@@ -95,6 +112,7 @@ if st.session_state.current_page == 'quiz':
                 st.session_state.submitted = False
                 if st.session_state.current_idx < total_q - 1:
                     st.session_state.current_idx += 1
+                    save_progress(st.session_state.current_idx) # 👈 唯一多出来的就是这一行，用于存档
                 else:
                     st.balloons()
                     st.toast("🎉 本套题目已全部刷完！")
