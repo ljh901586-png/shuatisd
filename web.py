@@ -12,20 +12,28 @@ PROGRESS_FILE = 'progress.json' # 【新增】进度保存文件
 # --- 数据加载与持久化逻辑 ---
 # ... (保留原有的 load_questions 和 load_error_book 等函数) ...
 
-# 【新增】以下两个关于进度的函数
-def load_progress():
-    """读取本地的刷题进度"""
+def load_progress(bank_name):
+    """读取对应题库的刷题进度"""
     if os.path.exists(PROGRESS_FILE):
         with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            return data.get('current_idx', 0)
+            return data.get(bank_name, 0)
     return 0
 
-def save_progress(idx):
-    """保存当前进度到本地"""
+def save_progress(idx, bank_name):
+    """保存进度到对应的题库名下"""
+    data = {}
+    if os.path.exists(PROGRESS_FILE):
+        # 兼容旧版本进度文件，防止报错
+        try:
+            with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except:
+            data = {}
+            
+    data[bank_name] = idx
     with open(PROGRESS_FILE, 'w', encoding='utf-8') as f:
-        json.dump({'current_idx': idx}, f, ensure_ascii=False, indent=4)
-
+        json.dump(data, f, ensure_ascii=False, indent=4)
 # --- 数据加载与持久化逻辑 ---
 @st.cache_data
 def load_questions():
@@ -55,7 +63,7 @@ if not all_questions:
 if 'error_book' not in st.session_state:
     st.session_state.error_book = load_error_book()
 if 'current_idx' not in st.session_state:
-    st.session_state.current_idx = load_progress() # 【修改】从文件加载上次的进度
+    st.session_state.current_idx = load_progress("全部题目") # 【修改】从文件加载上次的进度
 if 'submitted' not in st.session_state:
     st.session_state.submitted = False
 if 'current_page' not in st.session_state:
@@ -63,36 +71,64 @@ if 'current_page' not in st.session_state:
 
 # --- 侧边栏：全局导航与实时统计 ---
 with st.sidebar:
+    st.header("🎯 题库选择")
+    
+    # 自动从题库中提取所有独一无二的标签
+    all_tags = ["全部题目"]
+    for q in all_questions:
+        for t in q.get("tags", []):
+            if t not in all_tags:
+                all_tags.append(t)
+                
+    selected_bank = st.selectbox("选择当前要刷的题库：", all_tags)
+    
+    # 当检测到你切换了下拉框里的题库时，自动读取新题库的专属进度
+    if 'current_bank' not in st.session_state or st.session_state.current_bank != selected_bank:
+        st.session_state.current_bank = selected_bank
+        st.session_state.current_idx = load_progress(selected_bank)
+        st.session_state.submitted = False
+        
+    st.markdown("---")
     st.header("⚙️ 导航与统计")
     
-    # 实时统计
+    # 实时统计 (保留你原本的代码)
     error_count = len(st.session_state.error_book)
     st.metric(label="当前错题总数", value=f"{error_count} 题")
-    
-    # 页面切换
-    st.markdown("---")
-    if st.button("📝 返回刷题主页", use_container_width=True, type="primary" if st.session_state.current_page == 'quiz' else "secondary"):
-        st.session_state.current_page = 'quiz'
-        st.rerun()
-        
-    if st.button("📁 查看全部错题", use_container_width=True, type="primary" if st.session_state.current_page == 'error_book' else "secondary"):
-        st.session_state.current_page = 'error_book'
-        st.rerun()
+    # ... 后面的切换页面按钮保持不变 ...
 
+# ==========================================
 # ==========================================
 # 页面一：刷题模式
 # ==========================================
 if st.session_state.current_page == 'quiz':
-    st.title("📚 毛概多选题刷题")
+    st.title("📚 智能刷题神器")
     
-    total_q = len(all_questions)
-    q = all_questions[st.session_state.current_idx]
-    q_id_str = str(q['id'])
+    # 1. 核心修复：根据侧边栏的选择，把对应的题目塞进 current_questions 盒子里
+    if st.session_state.current_bank == "全部题目":
+        current_questions = all_questions
+    else:
+        current_questions = [q for q in all_questions if st.session_state.current_bank in q.get("tags", [])]
+        
+    # 2. 计算当前题库有多少道题
+    total_q = len(current_questions)
     
-    st.progress((st.session_state.current_idx + 1) / total_q)
-    st.caption(f"当前进度: {st.session_state.current_idx + 1} / {total_q} | 题号 ID: {q_id_str}")
-    st.markdown(f"### {q['question']}")
-
+    # 3. 安全保护：如果这个题库没题，给个提示
+    if total_q == 0:
+        st.warning("⚠️ 当前分类下没有题目，请重新选择！")
+    else:
+        # 防止进度越界（比如单选题只有50题，但你之前的进度是第100题）
+        if st.session_state.current_idx >= total_q:
+            st.session_state.current_idx = 0
+            
+        # 安全地拿到当前这道题
+        q = current_questions[st.session_state.current_idx]
+        q_id_str = str(q['id'])
+        
+        st.progress((st.session_state.current_idx + 1) / total_q)
+        st.caption(f"当前进度: {st.session_state.current_idx + 1} / {total_q} | 题号 ID: {q_id_str} | 当前题库: {st.session_state.current_bank}")
+        st.markdown(f"### {q['question']}")
+        
+        # ... 后面展示选项的代码保持不变 ...
     # 选项展示
     for opt_letter, opt_text in q['options'].items():
         st.checkbox(f"**{opt_letter}**. {opt_text}", key=f"quiz_opt_{q_id_str}_{opt_letter}", disabled=st.session_state.submitted)
@@ -112,10 +148,11 @@ if st.session_state.current_page == 'quiz':
                 st.session_state.submitted = False
                 if st.session_state.current_idx < total_q - 1:
                     st.session_state.current_idx += 1
-                    save_progress(st.session_state.current_idx) # 👈 唯一多出来的就是这一行，用于存档
+                    # 👇 这里加上了 st.session_state.current_bank 作为第二个参数
+                    save_progress(st.session_state.current_idx, st.session_state.current_bank) 
                 else:
                     st.balloons()
-                    st.toast("🎉 本套题目已全部刷完！")
+                    st.toast("🎉 本套分类题目已全部刷完！")
                 st.rerun()
                 
     # 【加入错题本按钮交互优化】
@@ -202,9 +239,14 @@ elif st.session_state.current_page == 'error_book':
                 c1, c2 = st.columns([1, 1])
                 with c1:
                     if st.button("🔄 重做本题", key=f"redo_{q_id_str}", use_container_width=True):
-                        # 定位到原题库索引
+                        # 【修复 Bug】为了防止错题跨题库导致下标越界，重做时自动切换到"全部题目"
+                        st.session_state.current_bank = "全部题目"
+                        
+                        # 从总题库 all_questions 中精确定位这道题的序号
                         original_idx = next((i for i, item in enumerate(all_questions) if item["id"] == q['id']), 0)
+                        
                         st.session_state.current_idx = original_idx
+                        save_progress(original_idx, "全部题目") 
                         st.session_state.submitted = False
                         st.session_state.current_page = 'quiz'
                         st.rerun()
